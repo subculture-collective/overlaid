@@ -59,6 +59,15 @@ describe('operator admission/rehearsal receipt projection', () => {
     await expect(decodeOperatorRehearsal({ ...raw, selectedVersionId: scope.accountId }, scope, intent, run, 'reproduce')).rejects.toThrow();
     await expect(decodeOperatorRehearsal(raw, scope, intent, run, 'current_config')).rejects.toThrow();
   });
+  it('accepts capture 2 with its admitted seed and seeded random steps only', async () => {
+    const { run, raw } = await fixture();
+    const seeded = { ...raw, captureVersion: 2, rehearsal: { ...raw.rehearsal, seed: 9007199254740991, steps: [raw.rehearsal.steps[0], { ...raw.rehearsal.steps[1], sequence: 2, kind: 'random', outcome: 'visited', reason: 'seeded_choice' }, { ...raw.rehearsal.steps[1], sequence: 3, parent: 2 }], proposals: [{ ...raw.rehearsal.proposals[0], sequence: 3 }] } };
+    await expect(decodeOperatorRehearsal(seeded, scope, intent, run, 'reproduce')).resolves.toMatchObject({ steps: [{ kind: 'admission' }, { kind: 'random', reason: 'seeded_choice' }, { kind: 'action' }] });
+    for (const seed of [0, -1, 1.5, 9007199254740992, '7']) await expect(decodeOperatorRehearsal({ ...seeded, rehearsal: { ...seeded.rehearsal, seed } }, scope, intent, run, 'reproduce')).rejects.toThrow();
+    await expect(decodeOperatorRehearsal({ ...seeded, captureVersion: 3 }, scope, intent, run, 'reproduce')).rejects.toThrow();
+    const badStep = { ...seeded, rehearsal: { ...seeded.rehearsal, steps: [seeded.rehearsal.steps[0], { ...seeded.rehearsal.steps[1], outcome: 'proposed' }, seeded.rehearsal.steps[2]] } };
+    await expect(decodeOperatorRehearsal(badStep, scope, intent, run, 'reproduce')).rejects.toThrow();
+  });
   it('allows equivalent offset clocks without discarding sub-millisecond source precision', async () => {
     const { run, raw } = await fixture();
     raw.rehearsal.clock = '2026-10-21T18:00:00.123456-05:00';

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -70,9 +71,9 @@ type FlowRehearsal struct {
 // child ended, a delay shifts its child, and parallel branches share their start
 // and end at the latest branch. Offsets above MaxDelayMS fail with
 // ErrRehearsalLimit. Parallel branches are walked in authored order. Set output records the declaration
-// only. Random, no-repeat and preset arguments remain unsupported: they need a
-// captured seed, retained no-repeat state or argument binding that no capture
-// format supplies yet.
+// only. Weighted random picks one child from the captured seed; without a seed
+// (capture 1) it stays unsupported. No-repeat and preset arguments remain
+// unsupported: they need retained no-repeat state or an argument binding.
 func RehearseFlow(ctx context.Context, g PinnedGraph, in RehearsalInput) (out FlowRehearsal, failure error) {
 	defer func() {
 		if ctx != nil && ctx.Err() != nil {
@@ -185,6 +186,11 @@ func (w *flowWalker) walk(k versionKey, id string, parent, depth int, at int64) 
 	}
 	kind, outcome, reason := n.Kind, "visited", "supported"
 	switch {
+	case n.Kind == "random" && !n.NoRepeat && w.in.Seed > 0:
+		// A captured seed fixes the weighted choice for this visit, so the same
+		// occurrence always takes the same branch. Loops get a fresh draw per visit.
+		seq := w.record(k, id, kind, "visited", "seeded_choice", parent)
+		return w.walk(k, n.Children[seededChoice(w.in.Seed, k, id, seq, n.Weights)], seq, depth+1, at)
 	case n.Kind == "random" || n.Kind == "preset" && len(n.Arguments) > 0:
 		w.record(k, id, kind, "unsupported", "unsupported_node", parent)
 		w.halt("unsupported", "unsupported_node")
@@ -284,4 +290,23 @@ func truthReason(v Truth) string {
 	default:
 		return "unavailable"
 	}
+}
+
+// seededChoice picks a child index with probability proportional to its weight.
+// The draw is a domain-separated hash of the captured seed, version, node and
+// trace sequence; validated weights sum to at most 1,000,000.
+func seededChoice(seed uint64, k versionKey, node string, seq int, weights []int) int {
+	sum, _ := hex.DecodeString(rehearsalHash("overlaid.engine.random.v1", strconv.FormatUint(seed, 10), k.automation, k.version, node, strconv.Itoa(seq)))
+	total := 0
+	for _, w := range weights {
+		total += w
+	}
+	r := int(binary.BigEndian.Uint64(sum[:8]) % uint64(total))
+	for i, w := range weights {
+		if r < w {
+			return i
+		}
+		r -= w
+	}
+	return len(weights) - 1
 }

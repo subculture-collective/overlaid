@@ -308,7 +308,7 @@ func TestOperatorChatPlansRollbackRefusalsAndDeadline(t *testing.T) {
 		text  string
 		count int
 		want  error
-	}{{"$(user)", 1, ErrAutomationPolicy}, {"$(random a b)", 1, ErrAutomationPolicy}, {"hello", 17, ErrAutomationPolicy}, {strings.Repeat("x", 501), 1, ErrLimit}} {
+	}{{"$(user)", 1, ErrAutomationPolicy}, {"hello", 17, ErrAutomationPolicy}, {strings.Repeat("x", 501), 1, ErrLimit}} {
 		v, r := prepare(860+i, 8600+i, test.text, test.count)
 		if got, e := store.PrepareOperatorChatPlan(ctx, owner, r, v.Document().VersionID, 2); !errors.Is(e, test.want) || !reflect.DeepEqual(got, OperatorChatPlanMetadata{}) {
 			t.Fatal("invalid plan accepted", i, e)
@@ -399,6 +399,16 @@ func TestOperatorChatPlansRollbackRefusalsAndDeadline(t *testing.T) {
 	}
 	if _, err = store.LookupOperatorChatPlan(ctx, owner, request); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatal("expired source retained plan", err)
+	}
+	// Random variables render from the seed captured at admission, so the same
+	// occurrence always prepares the same reply.
+	rv, rr := prepare(869, 8690, "$(random a b)", 1)
+	random, err := store.PrepareOperatorChatPlan(ctx, owner, rr, rv.Document().VersionID, 2)
+	if err != nil || random.EffectCount != 1 {
+		t.Fatal("seeded random plan", random, err)
+	}
+	if again, err := store.LookupOperatorChatPlan(ctx, owner, rr); err != nil || again.Digest != random.Digest {
+		t.Fatal("seeded random lookup", again, err)
 	}
 }
 

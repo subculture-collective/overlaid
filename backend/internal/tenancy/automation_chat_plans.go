@@ -93,7 +93,7 @@ func (s *AutomationStore) makeOperatorChatPlan(ctx context.Context, tx *tenantdb
 	if err != nil {
 		return operatorChatPlan{}, "", err
 	}
-	values, err := variables.NewSnapshot(variables.SnapshotInput{Clock: &input.Clock})
+	values, err := operatorSnapshot(input)
 	if err != nil {
 		return operatorChatPlan{}, "", ErrAutomationInvalid
 	}
@@ -119,7 +119,7 @@ func (s *AutomationStore) makeOperatorChatPlan(ctx context.Context, tx *tenantdb
 		}
 	}
 	id := operatorChatIdentity("overlaid.engine.operator-chat-source.v1", s.db.TenantID(), run.ID)
-	p := operatorChatPlan{FormatVersion: 1, SyntaxVersion: variables.SyntaxVersion, CaptureVersion: 1, TenantID: s.db.TenantID(), ID: id, RunID: run.ID, OccurrenceID: run.OccurrenceID, AutomationID: run.AutomationID, VersionID: run.VersionID, GraphDigest: run.GraphDigest, ConnectionID: connection, ChannelID: channel, Clock: run.CreatedAt.UTC(), Deadline: run.Deadline.UTC(), VariableFingerprint: text.VariableFingerprint, EffectCount: len(text.Proposals), Effects: []operatorChatEffect{}}
+	p := operatorChatPlan{FormatVersion: 1, SyntaxVersion: variables.SyntaxVersion, CaptureVersion: run.CaptureVersion(), TenantID: s.db.TenantID(), ID: id, RunID: run.ID, OccurrenceID: run.OccurrenceID, AutomationID: run.AutomationID, VersionID: run.VersionID, GraphDigest: run.GraphDigest, ConnectionID: connection, ChannelID: channel, Clock: run.CreatedAt.UTC(), Deadline: run.Deadline.UTC(), VariableFingerprint: text.VariableFingerprint, EffectCount: len(text.Proposals), Effects: []operatorChatEffect{}}
 	for _, proposal := range text.Proposals {
 		effect := operatorChatIdentity("overlaid.engine.operator-chat-effect.v1", p.TenantID, p.RunID, strconv.Itoa(proposal.Sequence), proposal.AutomationID, proposal.VersionID, proposal.NodeID)
 		p.Effects = append(p.Effects, operatorChatEffect{ID: effect, Sequence: proposal.Sequence, AutomationID: proposal.AutomationID, VersionID: proposal.VersionID, NodeID: proposal.NodeID, Text: proposal.Text, DelayMS: proposal.DelayMS})

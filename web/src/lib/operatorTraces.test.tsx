@@ -27,6 +27,15 @@ describe('saved metadata trace contract', () => {
     expect(html).toContain('stored snapshot'); expect(html).not.toContain('<button');
     expect(result).not.toHaveProperty('proposals'); expect(result).not.toHaveProperty('opaqueArguments');
   });
+  it('accepts a capture 2 trace with its admitted seed in canonical order', async () => {
+    const { ref, run, raw } = await fixture();
+    const document = { ...raw.document, captureVersion: 2, seed: 4171631309051035 };
+    await expect(decodeSavedOperatorTrace({ ...raw, document, digest: await digest(document) }, scope, ref, run)).resolves.toMatchObject({ digest: await digest(document) });
+    for (const seed of [0, 9007199254740992, 2.5]) {
+      const bad = { ...document, seed };
+      await expect(decodeSavedOperatorTrace({ ...raw, document: bad, digest: await digest(bad) }, scope, ref, run)).rejects.toThrow();
+    }
+  });
   it('refuses altered canonical bytes, extra private fields and mismatched original binding even with a new digest', async () => {
     const { ref, run, raw } = await fixture();
     for (const change of [{ seed: 1 }, { formatVersion: 2 }, { captureVersion: 2 }, { runId: 'c'.repeat(64) }, { tenantId: scope.accountId }, { versionId: scope.accountId }, { graphDigest: 'c'.repeat(64) }, { clock: '2026-10-21T23:00:00.123457Z' }, { proposals: ['PRIVATE'] }, { steps: [{ ...raw.document.steps[0], PRIVATE: 'secret' }] }, { steps: [{ ...raw.document.steps[0], Reason: 'private_error' }] }, { droppedSteps: 1 }]) {

@@ -59,13 +59,14 @@ var automationRunConstraints = map[string]struct{ table, definition string }{
 	"engine_run_occurrence":                            {"engine_operator_runs", "FOREIGN KEY (tenant_id, occurrence_id, automation_id, version_id, graph_digest, id) REFERENCES engine_operator_occurrences(tenant_id, id, automation_id, version_id, graph_digest, run_id) ON DELETE CASCADE"},
 	"engine_run_version":                               {"engine_operator_runs", "FOREIGN KEY (tenant_id, automation_id, version_id) REFERENCES engine_automation_versions(tenant_id, automation_id, id) ON DELETE CASCADE"},
 	"engine_run_actor":                                 {"engine_operator_runs", "FOREIGN KEY (tenant_id, actor_account_id) REFERENCES tenant_memberships(tenant_id, account_id) ON DELETE CASCADE"},
+	"engine_occurrence_seed":                           {"engine_operator_occurrences", "CHECK (((seed >= 0) AND (seed <= '9007199254740991'::bigint)))"},
 	"engine_run_budgets_pkey":                          {"engine_run_budgets", "PRIMARY KEY (tenant_id, automation_id)"},
 	"engine_budget_automation":                         {"engine_run_budgets", "FOREIGN KEY (tenant_id, automation_id) REFERENCES engine_automations(tenant_id, id) ON DELETE CASCADE"},
 	"engine_budget_interval":                           {"engine_run_budgets", `CHECK ((isfinite(charged_at) AND isfinite(cooldown_until) AND (cooldown_until >= charged_at) AND (cooldown_until <= (charged_at + '24:00:00'::interval))))`},
 }
 
 var automationRunColumns = map[string]map[string]string{
-	"engine_operator_occurrences": {"tenant_id": "uuid", "id": "text", "automation_id": "uuid", "version_id": "uuid", "graph_digest": "text", "run_id": "text", "created_at": "timestamp with time zone", "deadline": "timestamp with time zone"},
+	"engine_operator_occurrences": {"tenant_id": "uuid", "id": "text", "automation_id": "uuid", "version_id": "uuid", "graph_digest": "text", "run_id": "text", "created_at": "timestamp with time zone", "deadline": "timestamp with time zone", "seed": "bigint"},
 	"engine_operator_runs":        {"tenant_id": "uuid", "occurrence_id": "text", "automation_id": "uuid", "version_id": "uuid", "graph_digest": "text", "id": "text", "actor_account_id": "uuid"},
 	"engine_run_budgets":          {"tenant_id": "uuid", "automation_id": "uuid", "charged_at": "timestamp with time zone", "cooldown_until": "timestamp with time zone"},
 }
