@@ -10,8 +10,9 @@ import (
 
 // OperatorRehearsal contains private opaque proposals and authored identifiers.
 // CaptureVersion 1 is the original operator source format: database-created
-// occurrence clock, no captured facts and a fixed zero seed. It is not a provider
-// or variable capture. The result grants no execution or replay permission.
+// occurrence clock, no captured facts and a fixed zero seed. CaptureVersion 2
+// adds the seed chosen once at admission. Neither is a provider or variable
+// capture. The result grants no execution or replay permission.
 type OperatorRehearsal struct {
 	CaptureVersion    int
 	SelectedVersionID string
@@ -70,7 +71,7 @@ func (s *AutomationStore) rehearseOperatorTx(ctx context.Context, tx *tenantdb.T
 		return out, err
 	}
 	run.Unchanged = true
-	return OperatorRehearsal{CaptureVersion: 1, SelectedVersionID: selected.Root().Document().VersionID, Run: run, Flow: flow}, nil
+	return OperatorRehearsal{CaptureVersion: run.CaptureVersion(), SelectedVersionID: selected.Root().Document().VersionID, Run: run, Flow: flow}, nil
 }
 
 // operatorRehearsalInput reconstructs the same source-bound graph/capture for
@@ -104,7 +105,7 @@ func (s *AutomationStore) operatorRehearsalInput(ctx context.Context, tx *tenant
 	if err != nil {
 		return engine.PinnedGraph{}, engine.RehearsalInput{}, ErrAutomationInvalid
 	}
-	return selected, engine.RehearsalInput{OccurrenceID: run.OccurrenceID, OriginalGraphDigest: original.Digest(), Mode: mode, Clock: run.CreatedAt, Seed: 0, Facts: facts, TraceLimit: engine.MaxSteps}, nil
+	return selected, engine.RehearsalInput{OccurrenceID: run.OccurrenceID, OriginalGraphDigest: original.Digest(), Mode: mode, Clock: run.CreatedAt, Seed: run.Seed, Facts: facts, TraceLimit: engine.MaxSteps}, nil
 }
 
 func operatorRunGraph(ctx context.Context, tx *tenantdb.Tx, run OperatorRun) (engine.PinnedGraph, error) {

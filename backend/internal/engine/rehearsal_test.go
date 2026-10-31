@@ -94,7 +94,7 @@ func TestFlowRehearsalBranchesUnknownAndLazyTraversal(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			d := rehearsalDocument()
 			d.Restrictions = []Restriction{{ID: "choose", Mode: "all", Predicates: []Predicate{{ID: "check", Field: "ready", Operator: "eq", Value: "true"}}}}
-			d.Nodes = []Node{{ID: "root", Kind: kind, Children: []string{"send", "otherwise"}, Conditions: []string{"choose"}}, {ID: "send", Kind: "action", Capability: "chat.send"}, {ID: "otherwise", Kind: "random", Children: []string{"send"}, Weights: []int{1}}}
+			d.Nodes = []Node{{ID: "root", Kind: kind, Children: []string{"send", "otherwise"}, Conditions: []string{"choose"}}, {ID: "send", Kind: "action", Capability: "chat.send"}, {ID: "otherwise", Kind: "random", Children: []string{"send"}, Weights: []int{1}, NoRepeat: true}}
 			g, in := rehearsalFixture(t, d)
 			r, e := RehearseFlow(t.Context(), g, in)
 			if e != nil || r.Status != "blocked" || r.Reason != "condition_unavailable" || len(r.Proposals) != 0 {
@@ -198,6 +198,8 @@ func TestFlowRehearsalUnsupportedNodes(t *testing.T) {
 			d.Nodes = append(d.Nodes, Node{ID: "send", Kind: "action", Capability: "chat.send"})
 		}
 		g, in := rehearsalFixture(t, d)
+		// Without a captured seed (capture 1) weighted random stays unsupported.
+		in.Seed = 0
 		r, e := RehearseFlow(t.Context(), g, in)
 		if e != nil || r.Status != "unsupported" || r.Reason != "unsupported_node" || len(r.Proposals) != 0 {
 			t.Fatal(n.Kind, r, e)
@@ -357,5 +359,74 @@ func TestFlowRehearsalDelayOffsets(t *testing.T) {
 	g, in = rehearsalFixture(t, d)
 	if r, err = RehearseFlow(t.Context(), g, in); err != nil || r.Proposals[0].DelayMS != MaxDelayMS {
 		t.Fatal("exact cap", r, err)
+	}
+}
+
+func TestFlowRehearsalSeededRandom(t *testing.T) {
+	send := func(id string) Node {
+		return Node{ID: id, Kind: "action", Capability: "chat.send", Arguments: []Argument{{Name: "text", Value: id}}}
+	}
+	d := rehearsalDocument()
+	d.Nodes = []Node{
+		{ID: "root", Kind: "loop", Iterations: 20, Children: []string{"pick"}},
+		{ID: "pick", Kind: "random", Children: []string{"rare", "common"}, Weights: []int{1, 999_999}},
+		send("rare"), send("common"),
+	}
+	g, in := rehearsalFixture(t, d)
+	picks := func(seed uint64) []string {
+		t.Helper()
+		in.Seed = seed
+		r, err := RehearseFlow(t.Context(), g, in)
+		if err != nil || r.Status != "proposed" || len(r.Proposals) != 20 {
+			t.Fatal(seed, r, err)
+		}
+		got := []string{}
+		for _, p := range r.Proposals {
+			got = append(got, p.NodeID)
+		}
+		seeded := 0
+		for _, step := range r.Steps {
+			if step.Kind == "random" {
+				if step.Outcome != "visited" || step.Reason != "seeded_choice" {
+					t.Fatal(step)
+				}
+				seeded++
+			}
+		}
+		if seeded != 20 {
+			t.Fatal("seeded steps", seeded)
+		}
+		return got
+	}
+	// The same captured seed always takes the same branches.
+	first := picks(42)
+	if !reflect.DeepEqual(first, picks(42)) {
+		t.Fatal("seed not reproducible")
+	}
+	// Weights decide the odds: across 100 draws the 1-in-a-million branch never wins.
+	for _, seed := range []uint64{1, 2, 3, 4, 5} {
+		for _, id := range picks(seed) {
+			if id != "common" {
+				t.Fatal("weighted draw", seed, id)
+			}
+		}
+	}
+	// Equal weights split across seeds and visits; each loop visit draws again.
+	d.Nodes[1].Weights = []int{1, 1}
+	g, in = rehearsalFixture(t, d)
+	counts := map[string]int{}
+	for seed := uint64(1); seed <= 10; seed++ {
+		for _, id := range picks(seed) {
+			counts[id]++
+		}
+	}
+	if counts["rare"] < 60 || counts["common"] < 60 {
+		t.Fatal("even split", counts)
+	}
+	// No-repeat still needs retained state and stays unsupported with a seed.
+	d.Nodes[1].NoRepeat = true
+	g, in = rehearsalFixture(t, d)
+	if r, err := RehearseFlow(t.Context(), g, in); err != nil || r.Status != "unsupported" || len(r.Proposals) != 0 {
+		t.Fatal("no-repeat", r, err)
 	}
 }

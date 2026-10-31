@@ -1,5 +1,5 @@
 import { versionID, versionStorageKey, type VersionScope } from './automationVersions';
-import { decodeFlowMetadata, decodeRehearsalIntent, operatorIdentities, operatorIdentity, operatorTimestamp, sameOperatorInstant, type OperatorRun, type RehearsalIntent, type RehearsalMode } from './operatorRehearsal';
+import { decodeFlowMetadata, decodeRehearsalIntent, operatorIdentities, operatorIdentity, operatorTimestamp, sameOperatorInstant, validCaptureSeed, type OperatorRun, type RehearsalIntent, type RehearsalMode } from './operatorRehearsal';
 
 export type TraceReference = { format: 1; source: RehearsalIntent; traceId: string; mode: RehearsalMode; versionId: string; graphDigest: string; captureDigest: string };
 export type SavedOperatorTrace = ReturnType<typeof decodeFlowMetadata> & { id: string; runId: string; versionId: string; mode: RehearsalMode; originalGraphDigest: string; graphDigest: string; captureDigest: string; clock: string; digest: string; createdAt: string; unchanged: boolean };
@@ -21,7 +21,7 @@ export function decodeTraceReference(raw: string | null): TraceReference | null 
 
 export async function decodeSavedOperatorTrace(value: unknown, scope: VersionScope, ref: TraceReference, run: OperatorRun): Promise<SavedOperatorTrace> {
   const top = record(value); const d = record(top.document);
-  if (d.formatVersion !== 1 || d.captureVersion !== 1 || d.seed !== 0 || d.tenantId !== scope.tenantId || d.id !== ref.traceId || d.automationId !== ref.source.automationId || d.versionId !== ref.versionId || d.mode !== ref.mode || d.originalGraphDigest !== ref.source.graphDigest || d.graphDigest !== ref.graphDigest || d.captureDigest !== ref.captureDigest || typeof top.unchanged !== 'boolean' || !Array.isArray(d.steps)) return fail();
+  if (d.formatVersion !== 1 || !validCaptureSeed(d.captureVersion, d.seed) || d.tenantId !== scope.tenantId || d.id !== ref.traceId || d.automationId !== ref.source.automationId || d.versionId !== ref.versionId || d.mode !== ref.mode || d.originalGraphDigest !== ref.source.graphDigest || d.graphDigest !== ref.graphDigest || d.captureDigest !== ref.captureDigest || typeof top.unchanged !== 'boolean' || !Array.isArray(d.steps)) return fail();
   const ids = await operatorIdentities(scope, ref.source);
   const reportId = await operatorIdentity(['overlaid.engine.rehearsal.v1', ref.graphDigest, ref.source.graphDigest, ids.occurrenceId, ref.mode, ref.captureDigest, '100']);
   const clock = operatorTimestamp(d.clock);
@@ -30,7 +30,7 @@ export async function decodeSavedOperatorTrace(value: unknown, scope: VersionSco
   if (metadata.steps[0].kind !== 'admission' || metadata.steps[0].automationId !== ref.source.automationId || metadata.steps[0].versionId !== ref.versionId) return fail();
   // Match the stored format-1 Go struct order and capitalized FlowStep codec.
   // All allowed values are ASCII metadata; Go's HTML escaping changes none.
-  const canonical = { formatVersion: 1, tenantId: scope.tenantId, id: ref.traceId, runId: ids.runId, automationId: ref.source.automationId, versionId: ref.versionId, mode: ref.mode, captureVersion: 1, originalGraphDigest: ref.source.graphDigest, graphDigest: ref.graphDigest, captureDigest: ref.captureDigest, clock, seed: 0, status: metadata.status, reason: metadata.reason, steps: metadata.steps.map(s => ({ Sequence: s.sequence, Parent: s.parent, AutomationID: s.automationId, VersionID: s.versionId, NodeID: s.nodeId, Kind: s.kind, Outcome: s.outcome, Reason: s.reason })), droppedSteps: metadata.droppedSteps };
+  const canonical = { formatVersion: 1, tenantId: scope.tenantId, id: ref.traceId, runId: ids.runId, automationId: ref.source.automationId, versionId: ref.versionId, mode: ref.mode, captureVersion: d.captureVersion, originalGraphDigest: ref.source.graphDigest, graphDigest: ref.graphDigest, captureDigest: ref.captureDigest, clock, seed: d.seed, status: metadata.status, reason: metadata.reason, steps: metadata.steps.map(s => ({ Sequence: s.sequence, Parent: s.parent, AutomationID: s.automationId, VersionID: s.versionId, NodeID: s.nodeId, Kind: s.kind, Outcome: s.outcome, Reason: s.reason })), droppedSteps: metadata.droppedSteps };
   const raw = JSON.stringify(canonical);
   if (JSON.stringify(d) !== raw || new TextEncoder().encode(raw).length > 65536) return fail();
   const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`overlaid.engine.operator-trace.v1\0${raw}`));

@@ -111,7 +111,7 @@ func TestChatTextRejectsWholeOutputAndUnavailableCapture(t *testing.T) {
 	}
 }
 func TestChatTextFlowPrefixLoopsPresetsAndAggregateLimits(t *testing.T) {
-	for _, tail := range []Node{{ID: "tail", Kind: "random", Children: []string{"send"}, Weights: []int{1}}, {ID: "tail", Kind: "action", Capability: "chat.reply", Arguments: []Argument{{Name: "text", Value: "no parent"}}}, {ID: "tail", Kind: "action", Capability: "chat.send", Arguments: []Argument{{Name: "text", Value: "ok"}, {Name: "other", Value: "PRIVATE"}}}, {ID: "tail", Kind: "action", Capability: "chat.send"}} {
+	for _, tail := range []Node{{ID: "tail", Kind: "random", Children: []string{"send"}, Weights: []int{1}, NoRepeat: true}, {ID: "tail", Kind: "action", Capability: "chat.reply", Arguments: []Argument{{Name: "text", Value: "no parent"}}}, {ID: "tail", Kind: "action", Capability: "chat.send", Arguments: []Argument{{Name: "text", Value: "ok"}, {Name: "other", Value: "PRIVATE"}}}, {ID: "tail", Kind: "action", Capability: "chat.send"}} {
 		d := rehearsalDocument()
 		d.Nodes = []Node{{ID: "root", Kind: "sequential", Children: []string{"send", "tail"}}, {ID: "send", Kind: "action", Capability: "chat.send", Arguments: []Argument{{Name: "text", Value: "prefix"}}}, tail}
 		g, in := rehearsalFixture(t, d)

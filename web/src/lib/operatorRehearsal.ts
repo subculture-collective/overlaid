@@ -17,12 +17,18 @@ function at(value: unknown): string {
   return value;
 }
 function sameInstant(a: string, b: string): boolean { return Date.parse(a) === Date.parse(b) && (a.match(/\.(\d+)/)?.[1] || '').padEnd(9, '0') === (b.match(/\.(\d+)/)?.[1] || '').padEnd(9, '0'); }
+// Capture 1 has no seed (zero placeholder); capture 2 carries the seed chosen
+// once at admission, bounded so it stays an exact JavaScript integer.
+export function validCaptureSeed(version: unknown, seed: unknown): boolean {
+  return (version === 1 && seed === 0) || (version === 2 && Number.isSafeInteger(seed) && Number(seed) >= 1);
+}
 const admissionReasons = ['matched', 'policy_missing', 'filters_rejected', 'filters_unavailable', 'group_rejected', 'group_unavailable'];
 function validStep(s: RehearsalStep): boolean {
   if (s.kind === 'admission') return s.sequence === 1 && s.outcome === 'checked' && admissionReasons.includes(s.reason);
   if (s.kind === 'condition_group') return s.outcome === 'checked' && ['matched', 'not_matched', 'unavailable'].includes(s.reason);
   if (s.kind === 'action') return s.outcome === 'proposed' && s.reason === 'opaque_arguments';
   if (s.kind === 'stop') return s.outcome === 'stopped' && s.reason === 'explicit_stop';
+  if (s.kind === 'random' && s.reason === 'seeded_choice') return s.outcome === 'visited';
   if (s.outcome === 'unsupported') return ['random', 'delay', 'set_output', 'all', 'preset'].includes(s.kind) && s.reason === 'unsupported_node';
   // Simulated without waiting or rendering. Older traces may still record these
   // kinds as unsupported above.
@@ -79,7 +85,7 @@ export async function decodeOperatorRehearsal(value: unknown, scope: VersionScop
   const top = record(value); const r = record(top.rehearsal);
   const run = await decodeOperatorRun(top.run, scope, intent);
   const clock = at(r.clock);
-  if (!sameInstant(run.createdAt, accepted.createdAt) || !sameInstant(run.deadline, accepted.deadline) || top.captureVersion !== 1 || r.seed !== 0 || r.mode !== mode || r.originalGraphDigest !== intent.graphDigest || !sameInstant(clock, run.createdAt) || !['proposed', 'stopped', 'blocked', 'unsupported'].includes(String(r.status))) return fail();
+  if (!sameInstant(run.createdAt, accepted.createdAt) || !sameInstant(run.deadline, accepted.deadline) || !validCaptureSeed(top.captureVersion, r.seed) || r.mode !== mode || r.originalGraphDigest !== intent.graphDigest || !sameInstant(clock, run.createdAt) || !['proposed', 'stopped', 'blocked', 'unsupported'].includes(String(r.status))) return fail();
   const selectedVersionId = id(top.selectedVersionId); const graphDigest = hash(r.graphDigest); const captureDigest = hash(r.captureDigest);
   if (mode === 'reproduce' && (selectedVersionId !== intent.versionId || graphDigest !== intent.graphDigest)) return fail();
   const reportId = await identity(['overlaid.engine.rehearsal.v1', graphDigest, intent.graphDigest, run.occurrenceId, mode, captureDigest, '100']);

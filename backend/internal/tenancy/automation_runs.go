@@ -2,8 +2,10 @@ package tenancy
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -26,7 +28,31 @@ var (
 type OperatorRun struct {
 	ID, OccurrenceID, AutomationID, VersionID, GraphDigest string
 	CreatedAt, Deadline                                    time.Time
-	Unchanged                                              bool
+	// Seed is the occurrence's captured randomness, chosen once at admission.
+	// Zero marks a capture-1 occurrence admitted before seeds existed.
+	Seed      uint64 `json:"-"`
+	Unchanged bool
+}
+
+// MaxOperatorSeed keeps seeds exact as JavaScript numbers in browser codecs.
+const MaxOperatorSeed = 1<<53 - 1
+
+// CaptureVersion is 2 for occurrences with a captured seed and 1 otherwise.
+func (r OperatorRun) CaptureVersion() int {
+	if r.Seed > 0 {
+		return 2
+	}
+	return 1
+}
+
+// operatorSeed draws a fresh seed in 1..MaxOperatorSeed. It is stored with the
+// occurrence and never regenerated, so replays see the same choices.
+func operatorSeed() (uint64, error) {
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return 0, err
+	}
+	return binary.BigEndian.Uint64(raw[:])%MaxOperatorSeed + 1, nil
 }
 
 func operatorOccurrence(tenant, actor, request string) string {
@@ -138,7 +164,11 @@ func (s *AutomationStore) AdmitOperator(ctx context.Context, actor, request, aut
 		return out, ErrAutomationInvalid
 	}
 	deadline := now.Add(2 * time.Minute)
-	_, err = tx.ExecContext(ctx, `INSERT INTO engine_operator_occurrences(id,automation_id,version_id,graph_digest,run_id,created_at,deadline) VALUES($1,$2,$3,$4,$5,$6,$7)`, occurrence, automation, expected, graph.Digest(), id, now, deadline)
+	seed, err := operatorSeed()
+	if err != nil {
+		return out, err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO engine_operator_occurrences(id,automation_id,version_id,graph_digest,run_id,created_at,deadline,seed) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, occurrence, automation, expected, graph.Digest(), id, now, deadline, int64(seed))
 	if err != nil {
 		return out, err
 	}
@@ -153,7 +183,7 @@ func (s *AutomationStore) AdmitOperator(ctx context.Context, actor, request, aut
 	if err = tx.Commit(); err != nil {
 		return out, err
 	}
-	return OperatorRun{ID: id, OccurrenceID: occurrence, AutomationID: automation, VersionID: expected, GraphDigest: graph.Digest(), CreatedAt: now, Deadline: deadline}, nil
+	return OperatorRun{ID: id, OccurrenceID: occurrence, AutomationID: automation, VersionID: expected, GraphDigest: graph.Digest(), CreatedAt: now, Deadline: deadline, Seed: seed}, nil
 }
 
 func operatorRunCapacity(ctx context.Context, tx *tenantdb.Tx) error {
@@ -185,7 +215,12 @@ func operatorRunCapacity(ctx context.Context, tx *tenantdb.Tx) error {
 
 func lookupOperatorRun(ctx context.Context, tx *tenantdb.Tx, occurrence, actor string) (OperatorRun, error) {
 	var out OperatorRun
-	err := tx.QueryRowContext(ctx, `SELECT r.id,r.occurrence_id,r.automation_id,r.version_id,r.graph_digest,o.created_at,o.deadline FROM engine_operator_runs r JOIN engine_operator_occurrences o ON o.tenant_id=r.tenant_id AND o.id=r.occurrence_id WHERE r.tenant_id=current_setting('app.tenant_id')::uuid AND r.occurrence_id=$1 AND r.actor_account_id=$2`, occurrence, actor).Scan(&out.ID, &out.OccurrenceID, &out.AutomationID, &out.VersionID, &out.GraphDigest, &out.CreatedAt, &out.Deadline)
+	var seed int64
+	err := tx.QueryRowContext(ctx, `SELECT r.id,r.occurrence_id,r.automation_id,r.version_id,r.graph_digest,o.created_at,o.deadline,o.seed FROM engine_operator_runs r JOIN engine_operator_occurrences o ON o.tenant_id=r.tenant_id AND o.id=r.occurrence_id WHERE r.tenant_id=current_setting('app.tenant_id')::uuid AND r.occurrence_id=$1 AND r.actor_account_id=$2`, occurrence, actor).Scan(&out.ID, &out.OccurrenceID, &out.AutomationID, &out.VersionID, &out.GraphDigest, &out.CreatedAt, &out.Deadline, &seed)
+	if err == nil && (seed < 0 || seed > MaxOperatorSeed) {
+		return OperatorRun{}, ErrAutomationInvalid
+	}
+	out.Seed = uint64(seed)
 	return out, err
 }
 

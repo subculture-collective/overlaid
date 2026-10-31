@@ -53,7 +53,7 @@ func TestAutomationOperatorChatTextSourceAndAvailability(t *testing.T) {
 	}
 	before := snapshot()
 	text, err := read(engine.ModeReproduce, d.VersionID)
-	if err != nil || text.CaptureVersion != 1 || text.SyntaxVersion != 2 || !text.Run.Unchanged || text.Run.ID != run.ID || !text.Run.Deadline.Equal(run.Deadline) || len(text.Text.Proposals) != 1 {
+	if err != nil || text.CaptureVersion != 2 || text.Run.Seed == 0 || text.Run.Seed != run.Seed || text.SyntaxVersion != 2 || !text.Run.Unchanged || text.Run.ID != run.ID || !text.Run.Deadline.Equal(run.Deadline) || len(text.Text.Proposals) != 1 {
 		t.Fatal("source binding", text, err)
 	}
 	if text.Text.Proposals[0].Text != "  retained "+run.CreatedAt.UTC().Format(time.RFC3339Nano)+"  " {
@@ -96,7 +96,6 @@ func TestAutomationOperatorChatTextSourceAndAvailability(t *testing.T) {
 	}{
 		{"current $(time)", nil},
 		{"PRIVATE_PREFIX $(user)", engine.ErrChatTextUnavailable},
-		{"PRIVATE_PREFIX $(random a b)", engine.ErrChatTextUnavailable},
 		{"PRIVATE_PREFIX $(nowPlaying.title)", engine.ErrChatTextUnavailable},
 		{strings.Repeat("x", 501), engine.ErrChatTextLimit},
 		{"$(", engine.ErrChatText},

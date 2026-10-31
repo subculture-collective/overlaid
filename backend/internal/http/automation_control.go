@@ -365,7 +365,7 @@ func (a *Application) automationControl(w http.ResponseWriter, r *http.Request) 
 		for _, p := range text.Proposals {
 			proposals = append(proposals, map[string]any{"id": p.ID, "sequence": p.Sequence, "automationId": p.AutomationID, "versionId": p.VersionID, "nodeId": p.NodeID, "text": p.Text, "delayMs": p.DelayMS})
 		}
-		writeJSON(w, map[string]any{"captureVersion": result.CaptureVersion, "syntaxVersion": result.SyntaxVersion, "selectedVersionId": result.SelectedVersionID, "run": automationRunJSON(result.Run), "availableInputs": []string{"time"}, "chatText": map[string]any{"id": text.ID, "flowId": text.FlowID, "mode": text.Mode, "graphDigest": text.GraphDigest, "captureDigest": text.CaptureDigest, "variableFingerprint": text.VariableFingerprint, "proposals": proposals}})
+		writeJSON(w, map[string]any{"captureVersion": result.CaptureVersion, "syntaxVersion": result.SyntaxVersion, "selectedVersionId": result.SelectedVersionID, "run": automationRunJSON(result.Run), "availableInputs": chatTextInputs(result.CaptureVersion), "chatText": map[string]any{"id": text.ID, "flowId": text.FlowID, "mode": text.Mode, "graphDigest": text.GraphDigest, "captureDigest": text.CaptureDigest, "variableFingerprint": text.VariableFingerprint, "proposals": proposals}})
 	case "list-traces":
 		var body struct {
 			RequestID string `json:"requestId"`
@@ -473,4 +473,13 @@ func automationControlError(w http.ResponseWriter, err error) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": code})
+}
+
+// chatTextInputs lists the captured inputs available to the renderer: the
+// original clock always, and the admitted seed for capture-2 occurrences.
+func chatTextInputs(capture int) []string {
+	if capture == 2 {
+		return []string{"time", "seed"}
+	}
+	return []string{"time"}
 }

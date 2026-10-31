@@ -659,3 +659,7 @@ Migration 0045 lets an operator chat plan include delayed replies. Preparation s
 ### Phase 3 E4c: cancel unsent replies
 
 Account POST `cancel-chat-admission` and the delivery desk's **Cancel unsent replies** button cancel every reply of an admitted operator chat plan that has not been claimed, including delayed replies. Replies already sending or sent are not recalled. Migration 0046 adds the engine-only `canceled` code. Repeating the cancel is safe. Durable delay continuations (E4) are complete for operator chat plans; M1 command migration preview is next.
+
+### Phase 3 E5a: captured seed and weighted random
+
+Migration 0047 gives each new operator occurrence a seed, drawn once at admission and reused for every rehearsal, chat-text render, plan and trace of that occurrence (capture 2). Weighted random nodes now walk one child chosen from that seed (`seeded_choice`), and random variables render from it. Occurrences admitted earlier keep seed 0 (capture 1), where random stays unsupported. Older runtimes refuse the migrated schema. No-repeat, preset arguments and priority/pause remain open in E5.
