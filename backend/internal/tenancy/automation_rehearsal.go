@@ -2,6 +2,7 @@ package tenancy
 
 import (
 	"context"
+	"maps"
 	"time"
 
 	"git.subcult.tv/PatrickFanella/over-laid/internal/engine"
@@ -11,8 +12,9 @@ import (
 // OperatorRehearsal contains private opaque proposals and authored identifiers.
 // CaptureVersion 1 is the original operator source format: database-created
 // occurrence clock, no captured facts and a fixed zero seed. CaptureVersion 2
-// adds the seed chosen once at admission. Neither is a provider or variable
-// capture. The result grants no execution or replay permission.
+// adds the seed chosen once at admission. CaptureVersion 3 adds the no-repeat
+// memory captured at admission. None is a provider or variable capture. The
+// result grants no execution or replay permission.
 type OperatorRehearsal struct {
 	CaptureVersion    int
 	SelectedVersionID string
@@ -105,7 +107,7 @@ func (s *AutomationStore) operatorRehearsalInput(ctx context.Context, tx *tenant
 	if err != nil {
 		return engine.PinnedGraph{}, engine.RehearsalInput{}, ErrAutomationInvalid
 	}
-	return selected, engine.RehearsalInput{OccurrenceID: run.OccurrenceID, OriginalGraphDigest: original.Digest(), Mode: mode, Clock: run.CreatedAt, Seed: run.Seed, Facts: facts, TraceLimit: engine.MaxSteps}, nil
+	return selected, engine.RehearsalInput{OccurrenceID: run.OccurrenceID, OriginalGraphDigest: original.Digest(), Mode: mode, Clock: run.CreatedAt, Seed: run.Seed, Recent: maps.Clone(run.Recent), RecentCaptured: run.RecentCaptured, Facts: facts, TraceLimit: engine.MaxSteps}, nil
 }
 
 func operatorRunGraph(ctx context.Context, tx *tenantdb.Tx, run OperatorRun) (engine.PinnedGraph, error) {

@@ -662,4 +662,8 @@ Account POST `cancel-chat-admission` and the delivery desk's **Cancel unsent rep
 
 ### Phase 3 E5a: captured seed and weighted random
 
-Migration 0047 gives each new operator occurrence a seed, drawn once at admission and reused for every rehearsal, chat-text render, plan and trace of that occurrence (capture 2). Weighted random nodes now walk one child chosen from that seed (`seeded_choice`), and random variables render from it. Occurrences admitted earlier keep seed 0 (capture 1), where random stays unsupported. Older runtimes refuse the migrated schema. No-repeat, preset arguments and priority/pause remain open in E5.
+Migration 0047 gives each new operator occurrence a seed, drawn once at admission and reused for every rehearsal, chat-text render, plan and trace of that occurrence (capture 2). Weighted random nodes now walk one child chosen from that seed (`seeded_choice`), and random variables render from it. Occurrences admitted earlier keep seed 0 (capture 1), where random stays unsupported. Older runtimes refuse the migrated schema.
+
+### Phase 3 E5b: no-repeat random
+
+Migration 0048 keeps each automation's no-repeat memory on its budget row: the last child each no-repeat random node picked. Admission copies that memory onto the new occurrence (capture 3), walks the flow once to make the occurrence's picks, and saves them back. Rehearsals, plans and traces replay from the copy on the occurrence, so a no-repeat node never picks the same child twice in a row (unless it has only one), and earlier occurrences keep their results. Steps record `no_repeat_choice`. Occurrences admitted earlier keep capture 2 or 1, where no-repeat stays unsupported. Older runtimes refuse the migrated schema. Preset arguments and priority/pause remain open in E5.

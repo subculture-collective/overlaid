@@ -18,9 +18,10 @@ function at(value: unknown): string {
 }
 function sameInstant(a: string, b: string): boolean { return Date.parse(a) === Date.parse(b) && (a.match(/\.(\d+)/)?.[1] || '').padEnd(9, '0') === (b.match(/\.(\d+)/)?.[1] || '').padEnd(9, '0'); }
 // Capture 1 has no seed (zero placeholder); capture 2 carries the seed chosen
-// once at admission, bounded so it stays an exact JavaScript integer.
+// once at admission, bounded so it stays an exact JavaScript integer. Capture 3
+// adds server-side no-repeat memory; the browser sees only its seed.
 export function validCaptureSeed(version: unknown, seed: unknown): boolean {
-  return (version === 1 && seed === 0) || (version === 2 && Number.isSafeInteger(seed) && Number(seed) >= 1);
+  return (version === 1 && seed === 0) || ((version === 2 || version === 3) && Number.isSafeInteger(seed) && Number(seed) >= 1);
 }
 const admissionReasons = ['matched', 'policy_missing', 'filters_rejected', 'filters_unavailable', 'group_rejected', 'group_unavailable'];
 function validStep(s: RehearsalStep): boolean {
@@ -28,7 +29,7 @@ function validStep(s: RehearsalStep): boolean {
   if (s.kind === 'condition_group') return s.outcome === 'checked' && ['matched', 'not_matched', 'unavailable'].includes(s.reason);
   if (s.kind === 'action') return s.outcome === 'proposed' && s.reason === 'opaque_arguments';
   if (s.kind === 'stop') return s.outcome === 'stopped' && s.reason === 'explicit_stop';
-  if (s.kind === 'random' && s.reason === 'seeded_choice') return s.outcome === 'visited';
+  if (s.kind === 'random' && (s.reason === 'seeded_choice' || s.reason === 'no_repeat_choice')) return s.outcome === 'visited';
   if (s.outcome === 'unsupported') return ['random', 'delay', 'set_output', 'all', 'preset'].includes(s.kind) && s.reason === 'unsupported_node';
   // Simulated without waiting or rendering. Older traces may still record these
   // kinds as unsupported above.

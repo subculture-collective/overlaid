@@ -31,6 +31,8 @@ describe('saved metadata trace contract', () => {
     const { ref, run, raw } = await fixture();
     const document = { ...raw.document, captureVersion: 2, seed: 4171631309051035 };
     await expect(decodeSavedOperatorTrace({ ...raw, document, digest: await digest(document) }, scope, ref, run)).resolves.toMatchObject({ digest: await digest(document) });
+    const noRepeat = { ...document, captureVersion: 3 };
+    await expect(decodeSavedOperatorTrace({ ...raw, document: noRepeat, digest: await digest(noRepeat) }, scope, ref, run)).resolves.toMatchObject({ digest: await digest(noRepeat) });
     for (const seed of [0, 9007199254740992, 2.5]) {
       const bad = { ...document, seed };
       await expect(decodeSavedOperatorTrace({ ...raw, document: bad, digest: await digest(bad) }, scope, ref, run)).rejects.toThrow();

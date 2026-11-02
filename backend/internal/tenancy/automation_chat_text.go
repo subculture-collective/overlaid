@@ -22,7 +22,7 @@ type OperatorChatText struct {
 // RehearseOperatorChatText resolves an original actor/request and exact selected
 // version. No caller capture, report, graph or execution callback is accepted.
 // A capture-1 source's zero seed is a format placeholder and is never supplied
-// as captured randomness; capture 2 supplies the seed chosen at admission. This read creates no admission, trace or effect.
+// as captured randomness; captures 2 and 3 supply the seed chosen at admission. This read creates no admission, trace or effect.
 func (s *AutomationStore) RehearseOperatorChatText(ctx context.Context, actor, request string, mode engine.Mode, expected string, syntax int) (out OperatorChatText, failure error) {
 	callerCtx := ctx
 	defer func() {
@@ -84,7 +84,7 @@ func (s *AutomationStore) RehearseOperatorChatText(ctx context.Context, actor, r
 	return OperatorChatText{CaptureVersion: run.CaptureVersion(), SyntaxVersion: syntax, SelectedVersionID: selected, Run: run, Text: text}, nil
 }
 
-// operatorSnapshot supplies the original clock and, for capture 2, the seed
+// operatorSnapshot supplies the original clock and, for captures 2 and 3, the seed
 // chosen at admission. A zero seed is never passed as captured randomness.
 func operatorSnapshot(input engine.RehearsalInput) (variables.Snapshot, error) {
 	in := variables.SnapshotInput{Clock: &input.Clock}

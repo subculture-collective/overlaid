@@ -423,10 +423,85 @@ func TestFlowRehearsalSeededRandom(t *testing.T) {
 	if counts["rare"] < 60 || counts["common"] < 60 {
 		t.Fatal("even split", counts)
 	}
-	// No-repeat still needs retained state and stays unsupported with a seed.
+	// No-repeat without captured memory stays unsupported, even with a seed.
 	d.Nodes[1].NoRepeat = true
 	g, in = rehearsalFixture(t, d)
-	if r, err := RehearseFlow(t.Context(), g, in); err != nil || r.Status != "unsupported" || len(r.Proposals) != 0 {
+	in.Seed = 42
+	if r, err := RehearseFlow(t.Context(), g, in); err != nil || r.Status != "unsupported" || len(r.Proposals) != 0 || r.Recent != nil {
 		t.Fatal("no-repeat", r, err)
+	}
+}
+
+func TestFlowRehearsalNoRepeatRandom(t *testing.T) {
+	send := func(id string) Node {
+		return Node{ID: id, Kind: "action", Capability: "chat.send", Arguments: []Argument{{Name: "text", Value: id}}}
+	}
+	d := rehearsalDocument()
+	d.Nodes = []Node{
+		{ID: "root", Kind: "loop", Iterations: 20, Children: []string{"pick"}},
+		{ID: "pick", Kind: "random", NoRepeat: true, Children: []string{"a", "b", "c"}, Weights: []int{1, 1, 999_998}},
+		send("a"), send("b"), send("c"),
+	}
+	g, in := rehearsalFixture(t, d)
+	key := RandomKey(d.AutomationID, "pick")
+	if !reflect.DeepEqual(g.NoRepeatKeys(), []string{key}) {
+		t.Fatal(g.NoRepeatKeys())
+	}
+	run := func(seed uint64, recent map[string]string) FlowRehearsal {
+		t.Helper()
+		in.Seed, in.Recent, in.RecentCaptured = seed, recent, true
+		r, err := RehearseFlow(t.Context(), g, in)
+		if err != nil || r.Status != "proposed" || len(r.Proposals) != 20 {
+			t.Fatal(seed, r, err)
+		}
+		for _, step := range r.Steps {
+			if step.Kind == "random" && (step.Outcome != "visited" || step.Reason != "no_repeat_choice") {
+				t.Fatal(step)
+			}
+		}
+		return r
+	}
+	for seed := uint64(1); seed <= 10; seed++ {
+		r := run(seed, map[string]string{})
+		// No two consecutive visits pick the same child, even though "c" holds
+		// nearly all of the weight, and the memory ends on the final pick.
+		for i := 1; i < len(r.Proposals); i++ {
+			if r.Proposals[i].NodeID == r.Proposals[i-1].NodeID {
+				t.Fatal("repeat", seed, i)
+			}
+		}
+		if r.Recent[key] != r.Proposals[19].NodeID {
+			t.Fatal("memory", r.Recent)
+		}
+		// Captured memory from an earlier occurrence is skipped on the first visit.
+		prior := run(seed, map[string]string{key: "c", RandomKey(d.AutomationID, "gone"): "x"})
+		if prior.Proposals[0].NodeID == "c" || prior.Recent[RandomKey(d.AutomationID, "gone")] != "x" {
+			t.Fatal("prior memory", seed, prior.Proposals[0], prior.Recent)
+		}
+		// The same capture reproduces the same picks and capture digest.
+		again := run(seed, map[string]string{key: "c", RandomKey(d.AutomationID, "gone"): "x"})
+		if !reflect.DeepEqual(prior, again) || prior.CaptureDigest == r.CaptureDigest {
+			t.Fatal("reproduce", seed)
+		}
+	}
+	// A single child is picked every time; skipping it would leave nothing.
+	d.Nodes[1].Children, d.Nodes[1].Weights = []string{"a"}, []int{1}
+	d.Nodes = d.Nodes[:3]
+	g, in = rehearsalFixture(t, d)
+	if r := run(7, map[string]string{key: "a"}); r.Proposals[0].NodeID != "a" {
+		t.Fatal("single child", r.Proposals[0])
+	}
+	// Memory needs a seed, a map and valid keys; memory without the flag is refused.
+	for _, bad := range []RehearsalInput{
+		{Seed: 0, Recent: map[string]string{}, RecentCaptured: true},
+		{Seed: 1, Recent: nil, RecentCaptured: true},
+		{Seed: 1, Recent: map[string]string{"pick": "a"}, RecentCaptured: true},
+		{Seed: 1, Recent: map[string]string{key: "A B"}, RecentCaptured: true},
+		{Seed: 1, Recent: map[string]string{}},
+	} {
+		in.Seed, in.Recent, in.RecentCaptured = bad.Seed, bad.Recent, bad.RecentCaptured
+		if _, err := RehearseFlow(t.Context(), g, in); !errors.Is(err, ErrRehearsal) {
+			t.Fatal("invalid memory", bad, err)
+		}
 	}
 }

@@ -24,14 +24,14 @@ func (s *AutomationStore) validateRuns(ctx context.Context) error {
 		if err != nil || !valid {
 			return automationSchemaError(ctx)
 		}
-		err = s.db.QueryRowContext(ctx, `SELECT has_table_privilege(current_user,$1,'SELECT') AND has_table_privilege(current_user,$1,'INSERT') AND ($1<>'engine_operator_runs' OR has_table_privilege(current_user,$1,'DELETE')) AND ($1<>'engine_run_budgets' OR (has_column_privilege(current_user,$1,'charged_at','UPDATE') AND has_column_privilege(current_user,$1,'cooldown_until','UPDATE')))`, table).Scan(&valid)
+		err = s.db.QueryRowContext(ctx, `SELECT has_table_privilege(current_user,$1,'SELECT') AND has_table_privilege(current_user,$1,'INSERT') AND ($1<>'engine_operator_runs' OR has_table_privilege(current_user,$1,'DELETE')) AND ($1<>'engine_run_budgets' OR (has_column_privilege(current_user,$1,'charged_at','UPDATE') AND has_column_privilege(current_user,$1,'cooldown_until','UPDATE') AND has_column_privilege(current_user,$1,'recent','UPDATE')))`, table).Scan(&valid)
 		if err != nil || !valid {
 			return automationSchemaError(ctx)
 		}
 		err = s.db.QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM pg_roles r WHERE (r.rolname IN(current_user,session_user) OR pg_has_role(current_user,r.oid,'MEMBER') OR pg_has_role(session_user,r.oid,'MEMBER')) AND
    (r.rolsuper OR r.rolbypassrls OR r.rolcreaterole OR r.rolcreatedb OR has_schema_privilege(r.oid,current_schema(),'CREATE') OR EXISTS(SELECT 1 FROM pg_class c WHERE c.oid=to_regclass($1) AND c.relowner=r.oid) OR has_table_privilege(r.oid,$1,'TRUNCATE,REFERENCES,TRIGGER') OR ($1<>'engine_operator_runs' AND has_table_privilege(r.oid,$1,'DELETE')) OR
    EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=to_regclass($1) AND a.attnum>0 AND NOT a.attisdropped AND
-    (has_column_privilege(r.oid,a.attrelid,a.attnum,'REFERENCES') OR (($1<>'engine_run_budgets' OR a.attname NOT IN('charged_at','cooldown_until')) AND has_column_privilege(r.oid,a.attrelid,a.attnum,'UPDATE'))))))`, table).Scan(&valid)
+    (has_column_privilege(r.oid,a.attrelid,a.attnum,'REFERENCES') OR (($1<>'engine_run_budgets' OR a.attname NOT IN('charged_at','cooldown_until','recent')) AND has_column_privilege(r.oid,a.attrelid,a.attnum,'UPDATE'))))))`, table).Scan(&valid)
 		if err != nil || !valid {
 			return automationSchemaError(ctx)
 		}
@@ -60,13 +60,15 @@ var automationRunConstraints = map[string]struct{ table, definition string }{
 	"engine_run_version":                               {"engine_operator_runs", "FOREIGN KEY (tenant_id, automation_id, version_id) REFERENCES engine_automation_versions(tenant_id, automation_id, id) ON DELETE CASCADE"},
 	"engine_run_actor":                                 {"engine_operator_runs", "FOREIGN KEY (tenant_id, actor_account_id) REFERENCES tenant_memberships(tenant_id, account_id) ON DELETE CASCADE"},
 	"engine_occurrence_seed":                           {"engine_operator_occurrences", "CHECK (((seed >= 0) AND (seed <= '9007199254740991'::bigint)))"},
+	"engine_occurrence_recent":                         {"engine_operator_occurrences", `CHECK (((recent = 'null'::jsonb) OR ((jsonb_typeof(recent) = 'object'::text) AND (seed > 0) AND (octet_length((recent)::text) <= 524288))))`},
+	"engine_budget_recent":                             {"engine_run_budgets", `CHECK (((jsonb_typeof(recent) = 'object'::text) AND (octet_length((recent)::text) <= 524288)))`},
 	"engine_run_budgets_pkey":                          {"engine_run_budgets", "PRIMARY KEY (tenant_id, automation_id)"},
 	"engine_budget_automation":                         {"engine_run_budgets", "FOREIGN KEY (tenant_id, automation_id) REFERENCES engine_automations(tenant_id, id) ON DELETE CASCADE"},
 	"engine_budget_interval":                           {"engine_run_budgets", `CHECK ((isfinite(charged_at) AND isfinite(cooldown_until) AND (cooldown_until >= charged_at) AND (cooldown_until <= (charged_at + '24:00:00'::interval))))`},
 }
 
 var automationRunColumns = map[string]map[string]string{
-	"engine_operator_occurrences": {"tenant_id": "uuid", "id": "text", "automation_id": "uuid", "version_id": "uuid", "graph_digest": "text", "run_id": "text", "created_at": "timestamp with time zone", "deadline": "timestamp with time zone", "seed": "bigint"},
+	"engine_operator_occurrences": {"tenant_id": "uuid", "id": "text", "automation_id": "uuid", "version_id": "uuid", "graph_digest": "text", "run_id": "text", "created_at": "timestamp with time zone", "deadline": "timestamp with time zone", "seed": "bigint", "recent": "jsonb"},
 	"engine_operator_runs":        {"tenant_id": "uuid", "occurrence_id": "text", "automation_id": "uuid", "version_id": "uuid", "graph_digest": "text", "id": "text", "actor_account_id": "uuid"},
-	"engine_run_budgets":          {"tenant_id": "uuid", "automation_id": "uuid", "charged_at": "timestamp with time zone", "cooldown_until": "timestamp with time zone"},
+	"engine_run_budgets":          {"tenant_id": "uuid", "automation_id": "uuid", "charged_at": "timestamp with time zone", "cooldown_until": "timestamp with time zone", "recent": "jsonb"},
 }

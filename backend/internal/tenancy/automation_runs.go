@@ -1,6 +1,7 @@
 package tenancy
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -9,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"maps"
 	"time"
 
 	"git.subcult.tv/PatrickFanella/over-laid/internal/engine"
@@ -30,15 +32,23 @@ type OperatorRun struct {
 	CreatedAt, Deadline                                    time.Time
 	// Seed is the occurrence's captured randomness, chosen once at admission.
 	// Zero marks a capture-1 occurrence admitted before seeds existed.
-	Seed      uint64 `json:"-"`
-	Unchanged bool
+	Seed uint64 `json:"-"`
+	// Recent is the no-repeat memory captured at admission (capture 3): the
+	// last child each no-repeat random node picked before this occurrence.
+	Recent         map[string]string `json:"-"`
+	RecentCaptured bool              `json:"-"`
+	Unchanged      bool
 }
 
 // MaxOperatorSeed keeps seeds exact as JavaScript numbers in browser codecs.
 const MaxOperatorSeed = 1<<53 - 1
 
-// CaptureVersion is 2 for occurrences with a captured seed and 1 otherwise.
+// CaptureVersion is 3 for occurrences with captured no-repeat memory, 2 for a
+// captured seed alone and 1 otherwise.
 func (r OperatorRun) CaptureVersion() int {
+	if r.RecentCaptured {
+		return 3
+	}
 	if r.Seed > 0 {
 		return 2
 	}
@@ -149,7 +159,8 @@ func (s *AutomationStore) AdmitOperator(ctx context.Context, actor, request, aut
 	// independent of version changes, including zero-cooldown replacement versions.
 	var now time.Time
 	var until time.Time
-	err = tx.QueryRowContext(ctx, `SELECT cooldown_until FROM engine_run_budgets WHERE /*tenant:engine_run_budgets*/ AND automation_id=$1 FOR UPDATE`, automation).Scan(&until)
+	var memory []byte
+	err = tx.QueryRowContext(ctx, `SELECT cooldown_until,recent FROM engine_run_budgets WHERE /*tenant:engine_run_budgets*/ AND automation_id=$1 FOR UPDATE`, automation).Scan(&until, &memory)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return out, err
 	}
@@ -168,7 +179,13 @@ func (s *AutomationStore) AdmitOperator(ctx context.Context, actor, request, aut
 	if err != nil {
 		return out, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO engine_operator_occurrences(id,automation_id,version_id,graph_digest,run_id,created_at,deadline,seed) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, occurrence, automation, expected, graph.Digest(), id, now, deadline, int64(seed))
+	recent, next, err := operatorRecent(ctx, graph, facts, occurrence, now, seed, memory)
+	if err != nil {
+		return out, err
+	}
+	rawRecent, _ := json.Marshal(recent)
+	rawNext, _ := json.Marshal(next)
+	_, err = tx.ExecContext(ctx, `INSERT INTO engine_operator_occurrences(id,automation_id,version_id,graph_digest,run_id,created_at,deadline,seed,recent) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)`, occurrence, automation, expected, graph.Digest(), id, now, deadline, int64(seed), string(rawRecent))
 	if err != nil {
 		return out, err
 	}
@@ -176,14 +193,48 @@ func (s *AutomationStore) AdmitOperator(ctx context.Context, actor, request, aut
 	if err != nil {
 		return out, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO engine_run_budgets(automation_id,charged_at,cooldown_until) VALUES($1,$2,$3) ON CONFLICT(tenant_id,automation_id) DO UPDATE SET charged_at=excluded.charged_at,cooldown_until=excluded.cooldown_until`, automation, now, now.Add(time.Duration(d.Admission.CooldownMS)*time.Millisecond))
+	_, err = tx.ExecContext(ctx, `INSERT INTO engine_run_budgets(automation_id,charged_at,cooldown_until,recent) VALUES($1,$2,$3,$4::jsonb) ON CONFLICT(tenant_id,automation_id) DO UPDATE SET charged_at=excluded.charged_at,cooldown_until=excluded.cooldown_until,recent=excluded.recent`, automation, now, now.Add(time.Duration(d.Admission.CooldownMS)*time.Millisecond), string(rawNext))
 	if err != nil {
 		return out, err
 	}
 	if err = tx.Commit(); err != nil {
 		return out, err
 	}
-	return OperatorRun{ID: id, OccurrenceID: occurrence, AutomationID: automation, VersionID: expected, GraphDigest: graph.Digest(), CreatedAt: now, Deadline: deadline, Seed: seed}, nil
+	return OperatorRun{ID: id, OccurrenceID: occurrence, AutomationID: automation, VersionID: expected, GraphDigest: graph.Digest(), CreatedAt: now, Deadline: deadline, Seed: seed, Recent: recent, RecentCaptured: true}, nil
+}
+
+// operatorRecent returns the no-repeat memory to capture on a new occurrence
+// and the memory to keep afterwards. Both hold only the pinned graph's no-repeat
+// nodes, so memory from removed nodes is dropped. The occurrence's own picks
+// come from the same walk every later rehearsal of it repeats. A walk that fails
+// (for example on a step limit) picks nothing and leaves the memory unchanged.
+func operatorRecent(ctx context.Context, graph engine.PinnedGraph, facts engine.Facts, occurrence string, clock time.Time, seed uint64, raw []byte) (recent, next map[string]string, err error) {
+	stored := map[string]string{}
+	if raw != nil {
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.DisallowUnknownFields()
+		if dec.Decode(&stored) != nil || stored == nil || !engine.ValidRecent(stored) {
+			return nil, nil, ErrAutomationInvalid
+		}
+	}
+	recent = map[string]string{}
+	for _, key := range graph.NoRepeatKeys() {
+		if child, ok := stored[key]; ok {
+			recent[key] = child
+		}
+	}
+	next = maps.Clone(recent)
+	if len(graph.NoRepeatKeys()) == 0 {
+		return recent, next, nil
+	}
+	flow, err := engine.RehearseFlow(ctx, graph, engine.RehearsalInput{OccurrenceID: occurrence, OriginalGraphDigest: graph.Digest(), Mode: engine.ModeReproduce, Clock: clock, Seed: seed, Recent: recent, RecentCaptured: true, Facts: facts, TraceLimit: 1})
+	if ctx.Err() != nil {
+		return nil, nil, ctx.Err()
+	}
+	if err == nil {
+		next = flow.Recent
+	}
+	return recent, next, nil
 }
 
 func operatorRunCapacity(ctx context.Context, tx *tenantdb.Tx) error {
@@ -216,12 +267,23 @@ func operatorRunCapacity(ctx context.Context, tx *tenantdb.Tx) error {
 func lookupOperatorRun(ctx context.Context, tx *tenantdb.Tx, occurrence, actor string) (OperatorRun, error) {
 	var out OperatorRun
 	var seed int64
-	err := tx.QueryRowContext(ctx, `SELECT r.id,r.occurrence_id,r.automation_id,r.version_id,r.graph_digest,o.created_at,o.deadline,o.seed FROM engine_operator_runs r JOIN engine_operator_occurrences o ON o.tenant_id=r.tenant_id AND o.id=r.occurrence_id WHERE r.tenant_id=current_setting('app.tenant_id')::uuid AND r.occurrence_id=$1 AND r.actor_account_id=$2`, occurrence, actor).Scan(&out.ID, &out.OccurrenceID, &out.AutomationID, &out.VersionID, &out.GraphDigest, &out.CreatedAt, &out.Deadline, &seed)
-	if err == nil && (seed < 0 || seed > MaxOperatorSeed) {
+	var recent []byte
+	err := tx.QueryRowContext(ctx, `SELECT r.id,r.occurrence_id,r.automation_id,r.version_id,r.graph_digest,o.created_at,o.deadline,o.seed,o.recent FROM engine_operator_runs r JOIN engine_operator_occurrences o ON o.tenant_id=r.tenant_id AND o.id=r.occurrence_id WHERE r.tenant_id=current_setting('app.tenant_id')::uuid AND r.occurrence_id=$1 AND r.actor_account_id=$2`, occurrence, actor).Scan(&out.ID, &out.OccurrenceID, &out.AutomationID, &out.VersionID, &out.GraphDigest, &out.CreatedAt, &out.Deadline, &seed, &recent)
+	if err != nil {
+		return OperatorRun{}, err
+	}
+	if seed < 0 || seed > MaxOperatorSeed {
 		return OperatorRun{}, ErrAutomationInvalid
 	}
 	out.Seed = uint64(seed)
-	return out, err
+	if string(recent) != "null" {
+		dec := json.NewDecoder(bytes.NewReader(recent))
+		if dec.Decode(&out.Recent) != nil || out.Recent == nil || seed == 0 || !engine.ValidRecent(out.Recent) {
+			return OperatorRun{}, ErrAutomationInvalid
+		}
+		out.RecentCaptured = true
+	}
+	return out, nil
 }
 
 // LookupOperator is read-only and never recreates missing/purged work. Configure

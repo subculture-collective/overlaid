@@ -7,8 +7,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"git.subcult.tv/PatrickFanella/over-laid/internal/platform"
@@ -27,8 +29,50 @@ type RehearsalInput struct {
 	Mode                              Mode
 	Clock                             time.Time
 	Seed                              uint64
-	Facts                             Facts
-	TraceLimit                        int
+	// Recent is the captured no-repeat memory: the last child each no-repeat
+	// random node picked in earlier occurrences, keyed by RandomKey. It is used
+	// only when RecentCaptured; without it no-repeat stays unsupported.
+	Recent         map[string]string
+	RecentCaptured bool
+	Facts          Facts
+	TraceLimit     int
+}
+
+// MaxRecent bounds the no-repeat memory; a graph has at most this many nodes
+// that can be visited, so a larger memory is never needed.
+const MaxRecent = MaxPinnedVersions * MaxSteps
+
+// RandomKey names a no-repeat random node across versions of its automation.
+func RandomKey(automation, node string) string { return automation + "/" + node }
+
+// NoRepeatKeys lists the RandomKey of every no-repeat random node in the graph,
+// sorted. Callers keep memory only for these keys so it stays bounded.
+func (g PinnedGraph) NoRepeatKeys() []string {
+	keys := []string{}
+	for _, v := range g.versions {
+		d := v.Document()
+		for _, n := range d.Nodes {
+			if n.Kind == "random" && n.NoRepeat {
+				keys = append(keys, RandomKey(d.AutomationID, n.ID))
+			}
+		}
+	}
+	slices.Sort(keys)
+	return slices.Compact(keys)
+}
+
+// ValidRecent reports whether m is a well-formed no-repeat memory.
+func ValidRecent(m map[string]string) bool {
+	if len(m) > MaxRecent {
+		return false
+	}
+	for k, child := range m {
+		automation, node, ok := strings.Cut(k, "/")
+		if !ok || !uuid.MatchString(automation) || !name.MatchString(node) || !name.MatchString(child) {
+			return false
+		}
+	}
+	return true
 }
 
 // FlowStep contains authored identifiers and fixed outcome codes, not values or
@@ -54,10 +98,13 @@ type FlowRehearsal struct {
 	Mode                                                Mode
 	Clock                                               time.Time
 	Seed                                                uint64
-	Status, Reason                                      string
-	Steps                                               []FlowStep
-	DroppedSteps                                        int
-	Proposals                                           []FlowProposal
+	// Recent is the no-repeat memory after this walk: the input memory with
+	// each visited no-repeat node's last pick. It is nil unless RecentCaptured.
+	Recent         map[string]string
+	Status, Reason string
+	Steps          []FlowStep
+	DroppedSteps   int
+	Proposals      []FlowProposal
 	// Deferred reports that a delay node was visited. Proposal DelayMS values
 	// carry the resulting offsets; a zero offset still runs immediately.
 	Deferred bool
@@ -72,8 +119,9 @@ type FlowRehearsal struct {
 // and end at the latest branch. Offsets above MaxDelayMS fail with
 // ErrRehearsalLimit. Parallel branches are walked in authored order. Set output records the declaration
 // only. Weighted random picks one child from the captured seed; without a seed
-// (capture 1) it stays unsupported. No-repeat and preset arguments remain
-// unsupported: they need retained no-repeat state or an argument binding.
+// (capture 1) it stays unsupported. No-repeat random also skips the child its
+// node picked last, from captured memory (capture 3); without that memory it
+// stays unsupported. Preset arguments remain unsupported: they have no binding.
 func RehearseFlow(ctx context.Context, g PinnedGraph, in RehearsalInput) (out FlowRehearsal, failure error) {
 	defer func() {
 		if ctx != nil && ctx.Err() != nil {
@@ -84,23 +132,38 @@ func RehearseFlow(ctx context.Context, g PinnedGraph, in RehearsalInput) (out Fl
 			out = FlowRehearsal{}
 		}
 	}()
-	if ctx == nil || g.Digest() == "" || !occurrence.MatchString(in.OccurrenceID) || !occurrence.MatchString(in.OriginalGraphDigest) || !oneOf(string(in.Mode), string(ModeReproduce), string(ModeCurrentConfig)) || in.Clock.IsZero() || in.Clock.Year() < 1 || in.Clock.Year() > 9999 || !in.Facts.valid || in.Facts.tenant != g.Root().tenant || in.TraceLimit < 1 || in.TraceLimit > MaxSteps {
+	if ctx == nil || g.Digest() == "" || !occurrence.MatchString(in.OccurrenceID) || !occurrence.MatchString(in.OriginalGraphDigest) || !oneOf(string(in.Mode), string(ModeReproduce), string(ModeCurrentConfig)) || in.Clock.IsZero() || in.Clock.Year() < 1 || in.Clock.Year() > 9999 || !in.Facts.valid || in.Facts.tenant != g.Root().tenant || in.TraceLimit < 1 || in.TraceLimit > MaxSteps || in.RecentCaptured && (in.Seed == 0 || in.Recent == nil || !ValidRecent(in.Recent)) || !in.RecentCaptured && in.Recent != nil {
 		return out, ErrRehearsal
 	}
 	if in.Mode == ModeReproduce && in.OriginalGraphDigest != g.Digest() {
 		return out, ErrRehearsal
 	}
-	capture, err := json.Marshal(struct {
-		Clock time.Time
-		Seed  uint64
-		Facts map[string]Fact
-	}{in.Clock.UTC(), in.Seed, in.Facts.values})
+	// Captures without memory keep their original digest.
+	var capture []byte
+	var err error
+	if in.RecentCaptured {
+		capture, err = json.Marshal(struct {
+			Clock  time.Time
+			Seed   uint64
+			Recent map[string]string
+			Facts  map[string]Fact
+		}{in.Clock.UTC(), in.Seed, in.Recent, in.Facts.values})
+	} else {
+		capture, err = json.Marshal(struct {
+			Clock time.Time
+			Seed  uint64
+			Facts map[string]Fact
+		}{in.Clock.UTC(), in.Seed, in.Facts.values})
+	}
 	if err != nil {
 		return out, ErrRehearsal
 	}
 	captureDigest := rehearsalHash("overlaid.engine.capture.v1", string(capture))
 	out = FlowRehearsal{GraphDigest: g.Digest(), OriginalGraphDigest: in.OriginalGraphDigest, CaptureDigest: captureDigest, Mode: in.Mode, Clock: in.Clock.UTC(), Seed: in.Seed, Status: "proposed", Reason: "supported_flow", Steps: []FlowStep{}, Proposals: []FlowProposal{}}
 	out.ID = rehearsalHash("overlaid.engine.rehearsal.v1", g.Digest(), in.OriginalGraphDigest, in.OccurrenceID, string(in.Mode), captureDigest, strconv.Itoa(in.TraceLimit))
+	if in.RecentCaptured {
+		out.Recent = maps.Clone(in.Recent)
+	}
 	w := flowWalker{ctx: ctx, in: in, out: &out, nodes: map[versionKey]map[string]Node{}, roots: map[versionKey]string{}, groups: map[versionKey]map[string]Truth{}}
 	for _, v := range g.Versions() {
 		d := v.Document()
@@ -186,11 +249,35 @@ func (w *flowWalker) walk(k versionKey, id string, parent, depth int, at int64) 
 	}
 	kind, outcome, reason := n.Kind, "visited", "supported"
 	switch {
-	case n.Kind == "random" && !n.NoRepeat && w.in.Seed > 0:
+	case n.Kind == "random" && w.in.Seed > 0 && (!n.NoRepeat || w.in.RecentCaptured):
 		// A captured seed fixes the weighted choice for this visit, so the same
 		// occurrence always takes the same branch. Loops get a fresh draw per visit.
-		seq := w.record(k, id, kind, "visited", "seeded_choice", parent)
-		return w.walk(k, n.Children[seededChoice(w.in.Seed, k, id, seq, n.Weights)], seq, depth+1, at)
+		weights, reason := n.Weights, "seeded_choice"
+		key := RandomKey(k.automation, id)
+		if n.NoRepeat {
+			// Skip the last pick, from earlier occurrences or an earlier visit in
+			// this one, unless that would leave nothing to choose.
+			reason = "no_repeat_choice"
+			if last, ok := w.out.Recent[key]; ok {
+				weights = slices.Clone(n.Weights)
+				left := 0
+				for i, child := range n.Children {
+					if child == last {
+						weights[i] = 0
+					}
+					left += weights[i]
+				}
+				if left == 0 {
+					weights = n.Weights
+				}
+			}
+		}
+		seq := w.record(k, id, kind, "visited", reason, parent)
+		choice := seededChoice(w.in.Seed, k, id, seq, weights)
+		if n.NoRepeat {
+			w.out.Recent[key] = n.Children[choice]
+		}
+		return w.walk(k, n.Children[choice], seq, depth+1, at)
 	case n.Kind == "random" || n.Kind == "preset" && len(n.Arguments) > 0:
 		w.record(k, id, kind, "unsupported", "unsupported_node", parent)
 		w.halt("unsupported", "unsupported_node")
