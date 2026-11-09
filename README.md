@@ -142,3 +142,11 @@ Over-Laid is **GPL-3.0-only**; see [LICENSE](LICENSE). It was created from `subc
 [Automatic frontend delivery](docs/automatic-frontend-deployment.md) connects
 verified main CI to the existing NUC web service. Backend and managed-runtime
 release/qualification gates retain their separate procedures.
+
+## Public mirror CI
+
+Pull-request verification runs on standard GitHub-hosted runners in the public
+[subculture-collective/overlaid mirror](https://github.com/subculture-collective/overlaid/actions/workflows/mirror-ci.yml).
+Gitea remains the source for changes and pull requests. Its required
+`GitHub CI / Mirror CI gate` status follows the exact mirrored commit. Main-branch
+release verification and deployments run in Gitea.
