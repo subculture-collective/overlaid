@@ -4,7 +4,7 @@ go 1.26.11
 
 require (
 	git.subcult.tv/PatrickFanella/over-laid v0.0.0
-	github.com/jackc/pgx/v5 v5.13.0
+	github.com/jackc/pgx/v5 v5.10.0
 	github.com/riverqueue/river v0.47.0
 	github.com/riverqueue/river/riverdriver/riverdatabasesql v0.47.0
 )

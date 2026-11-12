@@ -6,7 +6,7 @@ require github.com/gorilla/websocket v1.5.3
 
 require (
 	github.com/godbus/dbus/v5 v5.2.4
-	github.com/jackc/pgx/v5 v5.13.0
+	github.com/jackc/pgx/v5 v5.10.0
 	github.com/riverqueue/river v0.47.0
 	github.com/riverqueue/river/riverdriver v0.47.0
 	github.com/riverqueue/river/riverdriver/riverdatabasesql v0.47.0
